@@ -34,7 +34,7 @@ WITH ins AS (
   RETURNING
     id, user_id, date,
     check_in_at, check_in_lat, check_in_lng, check_in_photo_url, check_in_ip,
-    check_out_at, check_out_ip, total_minutes, status, activity, notes,
+    check_out_at, check_out_ip, total_minutes, status, activity,
     created_at, updated_at,
     TRUE AS created
 ), upd AS (
@@ -54,7 +54,7 @@ WITH ins AS (
   RETURNING
     id, user_id, date,
     check_in_at, check_in_lat, check_in_lng, check_in_photo_url, check_in_ip,
-    check_out_at, check_out_ip, total_minutes, status, activity, notes,
+    check_out_at, check_out_ip, total_minutes, status, activity,
     created_at, updated_at,
     FALSE AS created
 )
@@ -68,7 +68,7 @@ LIMIT 1;
 SELECT
   id, user_id, date,
   check_in_at, check_in_lat, check_in_lng, check_in_photo_url, check_in_ip,
-  check_out_at, check_out_ip, total_minutes, status, activity, notes,
+  check_out_at, check_out_ip, total_minutes, status, activity,
   created_at, updated_at
 FROM attendances
 WHERE user_id = ? AND date = ?::date
@@ -91,7 +91,7 @@ WHERE a.user_id = ? AND a.date = ?::date AND a.check_out_at IS NULL
 RETURNING
   id, user_id, date,
   check_in_at, check_in_lat, check_in_lng, check_in_photo_url, check_in_ip,
-  check_out_at, check_out_ip, total_minutes, status, activity, notes,
+  check_out_at, check_out_ip, total_minutes, status, activity,
   created_at, updated_at;
 `
 )
