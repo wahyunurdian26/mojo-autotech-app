@@ -7,98 +7,73 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"mojo-autotech/constant"
 	"mojo-autotech/model"
 	attSvc "mojo-autotech/service/attedance"
 )
 
 func HttpAttendanceHandler(router *gin.Engine) {
-	svc := attSvc.NewAttendanceService() // <-- langsung, tanpa repo param
-	h := NewAttendanceHandler(svc)
-
+	h := NewAttendanceHandler()
 	router.POST("/attendance/check-in", mid.Auth(), h.CheckIn)
+	router.POST("/attendance/check-out", mid.Auth(), h.CheckOut)
+	router.GET("/attendance/today", mid.Auth(), h.Today)
+}
+
+var attendance = func() attSvc.IAttendanceService {
+	return attSvc.NewAttendanceService()
 }
 
 type AttendanceHandler struct {
-	svc attSvc.IAttendanceService
+	attendance attSvc.IAttendanceService
 }
 
-func NewAttendanceHandler(svc attSvc.IAttendanceService) *AttendanceHandler {
-	return &AttendanceHandler{svc: svc}
+func NewAttendanceHandler() *AttendanceHandler {
+	return &AttendanceHandler{
+		attendance: attendance(),
+	}
 }
 
-type checkInJSON struct {
-	Lat      *float64 `json:"lat"`
-	Lng      *float64 `json:"lng"`
-	PhotoURL *string  `json:"photo_url"`
-	Activity *string  `json:"activity"`
-}
-
-func (h *AttendanceHandler) CheckIn(c *gin.Context) {
-	var req checkInJSON
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, model.Response{
+func (h *AttendanceHandler) CheckIn(ctx *gin.Context) {
+	var param attSvc.CheckInReq
+	if err := ctx.ShouldBind(&param); err != nil {
+		ctx.JSON(http.StatusBadRequest, model.Response{
 			Code: http.StatusBadRequest,
-			Msg:  "Param request tidak valid",
+			Msg:  constant.ReqParamInvalid,
 			Err:  err.Error(),
 		})
 		return
 	}
 
-	uidVal, ok := c.Get("user_id")
+	uid, ok := ctx.Get("user_id")
 	if !ok {
-		c.JSON(http.StatusUnauthorized, model.Response{
+		ctx.JSON(http.StatusUnauthorized, model.Response{
 			Code: http.StatusUnauthorized,
 			Msg:  "Unauthorized",
 			Err:  "user_id tidak ditemukan di context",
 		})
 		return
 	}
-
-	var userID uint
-	switch v := uidVal.(type) {
-	case uint:
-		userID = v
-	case int:
-		if v >= 0 {
-			userID = uint(v)
-		}
-	case int64:
-		if v >= 0 {
-			userID = uint(v)
-		}
-	case float64:
-		if v >= 0 {
-			userID = uint(v)
-		}
-	default:
-		c.JSON(http.StatusUnauthorized, model.Response{
+	userID, ok := toUint(uid)
+	if !ok || userID == 0 {
+		ctx.JSON(http.StatusUnauthorized, model.Response{
 			Code: http.StatusUnauthorized,
 			Msg:  "Unauthorized",
-			Err:  "tipe user_id tidak didukung",
+			Err:  "tipe/isi user_id tidak valid",
 		})
 		return
 	}
 
-	out, created, err := h.svc.CheckIn(
-		c.Request.Context(),
-		attSvc.CheckInReq{
-			UserId:   userID,
-			Activity: *req.Activity,
-			Lat:      req.Lat,
-			Lng:      req.Lng,
-			PhotoURL: req.PhotoURL,
-			IP:       c.ClientIP(),
-		},
-	)
+	param.UserId = userID
+	param.IP = ctx.ClientIP()
+
+	out, created, err := h.attendance.CheckIn(ctx.Request.Context(), param)
 	if err != nil {
 		status := http.StatusInternalServerError
-		if err.Error() == "sudah check-in hari ini" {
-			status = http.StatusConflict
-		}
-		if err.Error() == "unauthorized" {
+		switch err.Error() {
+		case "unauthorized":
 			status = http.StatusUnauthorized
 		}
-		c.JSON(status, model.Response{
+		ctx.JSON(status, model.Response{
 			Code: status,
 			Msg:  "Gagal check-in",
 			Err:  err.Error(),
@@ -106,15 +81,127 @@ func (h *AttendanceHandler) CheckIn(c *gin.Context) {
 		return
 	}
 
-	code := http.StatusOK
-	msg := "Check-in diperbarui"
-	if created {
-		code = http.StatusCreated
-		msg = "Check-in berhasil"
+	code := http.StatusCreated
+	msg := "Check-in berhasil"
+	if !created {
+		code = http.StatusOK
+		msg = "Check-in diperbarui"
 	}
-	c.JSON(code, model.Response{
+	ctx.JSON(code, model.Response{
 		Code: code,
 		Msg:  msg,
+		Data: out,
+	})
+}
+
+func (h *AttendanceHandler) CheckOut(ctx *gin.Context) {
+	uid, ok := ctx.Get("user_id")
+	if !ok {
+		ctx.JSON(http.StatusUnauthorized, model.Response{
+			Code: http.StatusUnauthorized,
+			Msg:  "Unauthorized",
+			Err:  "user_id tidak ditemukan di context",
+		})
+		return
+	}
+	userID, ok := toUint(uid)
+	if !ok || userID == 0 {
+		ctx.JSON(http.StatusUnauthorized, model.Response{
+			Code: http.StatusUnauthorized,
+			Msg:  "Unauthorized",
+			Err:  "tipe/isi user_id tidak valid",
+		})
+		return
+	}
+
+	out, err := h.attendance.CheckOut(ctx.Request.Context(), attSvc.CheckOutReq{
+		UserId: userID,
+		IP:     ctx.ClientIP(),
+	})
+	if err != nil {
+		status := http.StatusInternalServerError
+		switch err.Error() {
+		case "unauthorized":
+			status = http.StatusUnauthorized
+		case "belum check-in":
+			status = http.StatusConflict
+		case "sudah check-out":
+			status = http.StatusConflict
+		case "belum check-in atau sudah check-out":
+			status = http.StatusConflict
+		}
+		ctx.JSON(status, model.Response{
+			Code: status,
+			Msg:  "Gagal check-out",
+			Err:  err.Error(),
+		})
+		return
+	}
+
+	ctx.JSON(http.StatusOK, model.Response{
+		Code: http.StatusOK,
+		Msg:  "Check-out berhasil",
+		Data: out,
+	})
+}
+
+func toUint(v any) (uint, bool) {
+	switch x := v.(type) {
+	case uint:
+		return x, true
+	case int:
+		if x >= 0 {
+			return uint(x), true
+		}
+	case int64:
+		if x >= 0 {
+			return uint(x), true
+		}
+	case float64:
+		if x >= 0 {
+			return uint(x), true
+		}
+	}
+	return 0, false
+}
+
+func (h *AttendanceHandler) Today(ctx *gin.Context) {
+	uid, ok := ctx.Get("user_id")
+	if !ok {
+		ctx.JSON(http.StatusUnauthorized, model.Response{
+			Code: http.StatusUnauthorized,
+			Msg:  "Unauthorized",
+			Err:  "user_id tidak ditemukan di context",
+		})
+		return
+	}
+	userID, ok := toUint(uid)
+	if !ok || userID == 0 {
+		ctx.JSON(http.StatusUnauthorized, model.Response{
+			Code: http.StatusUnauthorized,
+			Msg:  "Unauthorized",
+			Err:  "tipe/isi user_id tidak valid",
+		})
+		return
+	}
+
+	out, err := h.attendance.GetToday(ctx.Request.Context(), userID)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if err.Error() == "unauthorized" {
+			status = http.StatusUnauthorized
+		}
+		ctx.JSON(status, model.Response{
+			Code: status,
+			Msg:  "Gagal memuat status hari ini",
+			Err:  err.Error(),
+		})
+		return
+	}
+
+	ctx.JSON(http.StatusOK, model.Response{
+		Code: http.StatusOK,
+		Msg:  "Status hari ini",
 		Data: out,
 	})
 }
